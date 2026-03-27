@@ -194,3 +194,44 @@ def overhead_add(
     overhead_list.append(overhead)
     save_overhead(overhead_list, config.data_dir)
     typer.echo(f"Added overhead to {product_sku}.")
+
+
+_VALID_ENTITIES = {"products", "materials", "labor", "overhead"}
+
+
+@app.command("export")
+def export_cmd(
+    entity: str = typer.Argument(...),
+    file: str = typer.Argument(...),
+) -> None:
+    from pathlib import Path
+    from precifique.core.csv_io import export_entity
+
+    if entity not in _VALID_ENTITIES:
+        typer.echo(f"Unknown entity '{entity}'. Choose from: {', '.join(sorted(_VALID_ENTITIES))}", err=True)
+        raise typer.Exit(code=1)
+
+    config = get_config()
+    export_entity(entity, Path(file), config.data_dir)
+    typer.echo(f"Exported {entity} to {file}.")
+
+
+@app.command("import")
+def import_cmd(
+    entity: str = typer.Argument(...),
+    file: str = typer.Argument(...),
+) -> None:
+    from pathlib import Path
+    from precifique.core.csv_io import import_entity
+
+    if entity not in _VALID_ENTITIES:
+        typer.echo(f"Unknown entity '{entity}'. Choose from: {', '.join(sorted(_VALID_ENTITIES))}", err=True)
+        raise typer.Exit(code=1)
+
+    config = get_config()
+    try:
+        count = import_entity(entity, Path(file), config.data_dir)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Imported {count} record(s) into {entity}.")
