@@ -2,13 +2,26 @@ import typer
 
 from precifique.config import get_config
 from precifique.core.storage import (
+    load_labor,
+    load_materials,
+    load_overhead,
     load_products,
+    save_labor,
+    save_materials,
+    save_overhead,
     save_products,
 )
 
 app = typer.Typer()
 product_app = typer.Typer()
+material_app = typer.Typer()
+labor_app = typer.Typer()
+overhead_app = typer.Typer()
+
 app.add_typer(product_app, name="product", help="Manage your product catalog.")
+app.add_typer(material_app, name="material", help="Manage materials.")
+app.add_typer(labor_app, name="labor", help="Manage labor.")
+app.add_typer(overhead_app, name="overhead", help="Manage overhead costs.")
 
 
 @product_app.command("add")
@@ -71,3 +84,69 @@ def product_delete(sku: str = typer.Argument(...)) -> None:
 
     save_products(remaining, config.data_dir)
     typer.echo(f"Deleted product: {sku}")
+
+
+def _require_product(sku: str) -> None:
+    config = get_config()
+    products = load_products(config.data_dir)
+    if not any(p.sku == sku for p in products):
+        typer.echo(f"Product '{sku}' not found.", err=True)
+        raise typer.Exit(code=1)
+
+
+@material_app.command("add")
+def material_add(
+    product_sku: str = typer.Argument(...),
+    name: str = typer.Option(..., prompt=True),
+    unit_cost: float = typer.Option(..., "--unit-cost", prompt=True),
+    quantity: float = typer.Option(..., prompt=True),
+) -> None:
+    from precifique.core.models import Material
+
+    _require_product(product_sku)
+    config = get_config()
+    material = Material(product_sku=product_sku, name=name, unit_cost=unit_cost, quantity=quantity)
+    materials = load_materials(config.data_dir)
+    materials.append(material)
+    save_materials(materials, config.data_dir)
+    typer.echo(f"Added material '{name}' to {product_sku}.")
+
+
+@labor_app.command("add")
+def labor_add(
+    product_sku: str = typer.Argument(...),
+    hours: float = typer.Option(..., prompt=True),
+    hourly_rate: float = typer.Option(..., "--hourly-rate", prompt=True),
+) -> None:
+    from precifique.core.models import Labor
+
+    _require_product(product_sku)
+    config = get_config()
+    labor = Labor(product_sku=product_sku, hours=hours, hourly_rate=hourly_rate)
+    labor_list = load_labor(config.data_dir)
+    labor_list.append(labor)
+    save_labor(labor_list, config.data_dir)
+    typer.echo(f"Added labor to {product_sku}.")
+
+
+@overhead_app.command("add")
+def overhead_add(
+    product_sku: str = typer.Argument(...),
+    rent: float = typer.Option(..., prompt=True),
+    tools: float = typer.Option(..., prompt=True),
+    packaging: float = typer.Option(..., prompt=True),
+    shipping: float = typer.Option(..., prompt=True),
+    taxes: float = typer.Option(..., prompt=True),
+) -> None:
+    from precifique.core.models import Overhead
+
+    _require_product(product_sku)
+    config = get_config()
+    overhead = Overhead(
+        product_sku=product_sku,
+        rent=rent, tools=tools, packaging=packaging, shipping=shipping, taxes=taxes,
+    )
+    overhead_list = load_overhead(config.data_dir)
+    overhead_list.append(overhead)
+    save_overhead(overhead_list, config.data_dir)
+    typer.echo(f"Added overhead to {product_sku}.")
