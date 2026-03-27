@@ -129,6 +129,50 @@ def labor_add(
     typer.echo(f"Added labor to {product_sku}.")
 
 
+_CURRENCY_SYMBOLS = {
+    "BRL": "R$",
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+}
+
+
+@app.command("price")
+def price(sku: str = typer.Argument(...)) -> None:
+    from precifique.core.calc import calculate_price
+    from precifique.core.models import Labor, Material, Overhead
+
+    config = get_config()
+    products = load_products(config.data_dir)
+    product = next((p for p in products if p.sku == sku), None)
+    if product is None:
+        typer.echo(f"Product '{sku}' not found.", err=True)
+        raise typer.Exit(code=1)
+
+    materials = [m for m in load_materials(config.data_dir) if m.product_sku == sku]
+    labor = [l for l in load_labor(config.data_dir) if l.product_sku == sku]
+    overhead = [o for o in load_overhead(config.data_dir) if o.product_sku == sku]
+
+    bd = calculate_price(product, materials, labor, overhead)
+    sym = _CURRENCY_SYMBOLS.get(config.currency, config.currency)
+
+    sep = "─" * 33
+    typer.echo(f"Product: {bd.product_name}")
+    typer.echo(sep)
+    typer.echo(f"{'Materials':<20} {sym} {bd.materials_subtotal:.2f}")
+    typer.echo(f"{'Labor':<20} {sym} {bd.labor_subtotal:.2f}")
+    typer.echo(f"{'Overhead':<20} {sym} {bd.overhead_subtotal:.2f}")
+    typer.echo(f"  └ {'Rent':<18} {sym} {bd.rent:.2f}")
+    typer.echo(f"  └ {'Tools':<18} {sym} {bd.tools:.2f}")
+    typer.echo(f"  └ {'Packaging':<18} {sym} {bd.packaging:.2f}")
+    typer.echo(f"  └ {'Shipping':<18} {sym} {bd.shipping:.2f}")
+    typer.echo(f"  └ {'Taxes':<18} {sym} {bd.taxes:.2f}")
+    typer.echo(sep)
+    typer.echo(f"{'Total Cost':<20} {sym} {bd.total_cost:.2f}")
+    typer.echo(f"{'Profit Margin':<20} {bd.profit_margin:.0f}%")
+    typer.echo(f"{'Selling Price':<20} {sym} {bd.selling_price:.2f}")
+
+
 @overhead_app.command("add")
 def overhead_add(
     product_sku: str = typer.Argument(...),
