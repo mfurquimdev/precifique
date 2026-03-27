@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "precifique"
+version = "0.1.0"
+description = "Artisan product pricing tool"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic",
+    "typer",
+    "fastapi",
+    "jinja2",
+    "python-multipart",
+    "uvicorn",
+]
+
+[project.scripts]
+precifique = "precifique.cli.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
