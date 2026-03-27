@@ -160,3 +160,6 @@ shell.nix
 
 .vscode/
 
+# Agents Skills
+.agents
+.claude
