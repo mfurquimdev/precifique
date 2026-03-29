@@ -22,3 +22,8 @@ target
 
 .agents/
 .claude/
+
+
+# Added by cargo
+
+/target
