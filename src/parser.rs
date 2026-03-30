@@ -1,12 +1,16 @@
+use crate::ast::{Component, Entry};
+use crate::lexer::Token;
 use parlex::parser;
 
 parser! {
     pub grammar PrecifiqueParser for Token {
         pub entries: Vec<Entry> = {
             let mut v = Vec::new();
+
             while let Some(e) = entry() {
                 v.push(e);
             }
+
             v
         };
 
@@ -15,7 +19,7 @@ parser! {
             expect_newline();
 
             let mut components = Vec::new();
-            let mut material = None;
+            let mut material: Option<(f64, f64)> = None;
 
             while peek_indent() {
                 expect_indent();
@@ -29,6 +33,7 @@ parser! {
                     let qty = expect_number();
                     expect_x();
                     let cname = expect_name();
+
                     components.push(Component {
                         quantity: qty,
                         name: cname,

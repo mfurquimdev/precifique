@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 
+use crate::ast::{Component, Entry};
+
 pub struct PrecifiqueEngine {
     materials: HashMap<String, (f64, f64)>,
     products: HashMap<String, Vec<Component>>,
