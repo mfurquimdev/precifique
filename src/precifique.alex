@@ -1,0 +1,57 @@
+-- Lexer spec for the precifique inventory format.
+--
+-- Modes:
+--   Initial     -- start of each line
+--   AfterHeader -- waiting for the newline that ends a header name line
+--   Indented    -- after consuming a 4-space indent
+--   Price       -- reading the price number after '@'
+--   CompName    -- reading the component name (rest of line) after 'NNNx '
+--
+-- Token stream per entry:
+--   Material: Name Newline Indent QtyAt Number Newline
+--   Product:  Name Newline (Indent QtyTimes Name Newline)+
+
+-- Pattern definitions
+NL  = \r?\n
+NUM = [0-9]+(?:\.[0-9]+)?
+
+-- ── Initial mode ────────────────────────────────────────────────────────────
+-- Blank lines (empty or only newline) are skipped silently.
+BlankLine: <Initial> {{NL}}
+
+-- A header name line: starts with any non-whitespace character.
+-- Consumes everything up to (but not including) the newline.
+Header: <Initial> [^ \t\r\n][^\r\n]*
+
+-- A 4-space indent that starts an indented line.
+Indent: <Initial> [ ]{4}
+
+-- ── AfterHeader mode ────────────────────────────────────────────────────────
+-- The newline that terminates a header name line.
+HeaderNl: <AfterHeader> {{NL}}
+
+-- ── Indented mode ────────────────────────────────────────────────────────────
+-- Material pattern: integer quantity immediately followed by '@'.
+-- e.g. "500@"  "1@"
+QtyAt: <Indented> [0-9]+@
+
+-- Component pattern: integer quantity immediately followed by 'x' and one space.
+-- e.g. "5x "  "20x "
+QtyTimes: <Indented> [0-9]+x[ ]
+
+-- ── Price mode ───────────────────────────────────────────────────────────────
+-- The numeric price (integer or decimal) after '@'.
+Price: <Price> {{NUM}}
+
+-- The newline that terminates a material line.
+PriceNl: <Price> {{NL}}
+
+-- ── CompName mode ────────────────────────────────────────────────────────────
+-- Everything from after 'NNNx ' up to (but not including) the newline.
+CompName: <CompName> [^\r\n]+
+
+-- The newline that terminates a component line.
+CompNameNl: <CompName> {{NL}}
+
+-- ── Catch-all ────────────────────────────────────────────────────────────────
+Error: <*> .

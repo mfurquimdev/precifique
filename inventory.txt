@@ -1,0 +1,13 @@
+Papel Offset 75g
+    500@30
+
+Palito S
+    200@20
+
+Impressão
+    1@0.5
+
+Topo de Bolo
+    5x Papel Offset 75g
+    20x Palito S
+    5x Impressão

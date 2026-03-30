@@ -1,72 +1,230 @@
-use anyhow::{Result, anyhow, bail};
+//! Parser for the precifique inventory format.
+//!
+//! This module wires the ASLR-generated SLR(1) tables (`parser_data`) to a
+//! hand-written [`PrecifiqueParserDriver`] that performs semantic reductions.
+//!
+//! Grammar (see `precifique.g`):
+//!
+//! ```text
+//! doc:   Document  -> EntryList
+//! list1: EntryList -> EntryList Entry
+//! list2: EntryList -> Entry
+//! mat:   Entry     -> name newline indent qtyat number newline
+//! prod:  Entry     -> name newline CompLines
+//! cl1:   CompLines -> CompLines CompLine
+//! cl2:   CompLines -> CompLine
+//! comp:  CompLine  -> indent qtytimes name newline
+//! ```
+//!
+//! The parser yields one `PrecifiqueToken` whose `value` is
+//! `TokenValue::Entries(Vec<Entry>)` when the entire document has been parsed.
 
-use crate::ast::{Component, Entry};
+use crate::ast;
+use crate::lexer::PrecifiqueLexer;
+use crate::token::{PrecifiqueToken, TokenID, TokenValue};
+use parlex::{LexerStats, ParlexError, Parser, ParserAction, ParserDriver, ParserStats};
+use std::marker::PhantomData;
+use try_next::TryNextWithContext;
 
-pub fn parse(input: &str) -> Result<Vec<Entry>> {
-    let mut entries = Vec::new();
-    let mut lines = input.lines().peekable();
-
-    while let Some(line) = lines.next() {
-        let name = line.trim().to_string();
-        if name.is_empty() {
-            continue;
-        }
-
-        let mut components: Vec<Component> = Vec::new();
-        let mut material: Option<(f64, f64)> = None;
-
-        while let Some(&next_line) = lines.peek() {
-            if !next_line.starts_with("    ") {
-                break;
-            }
-            let indented = lines.next().unwrap().trim();
-
-            if let Some(at_pos) = indented.find('@') {
-                let qty_str = indented[..at_pos].trim();
-                let price_str = indented[at_pos + 1..].trim();
-                let qty: f64 = qty_str
-                    .parse()
-                    .map_err(|_| anyhow!("Invalid quantity: {}", qty_str))?;
-                let price: f64 = price_str
-                    .parse()
-                    .map_err(|_| anyhow!("Invalid price: {}", price_str))?;
-                material = Some((qty, price));
-            } else if let Some(x_pos) = find_x_separator(indented) {
-                let qty_str = indented[..x_pos].trim();
-                let cname = indented[x_pos + 1..].trim().to_string();
-                let qty: f64 = qty_str
-                    .parse()
-                    .map_err(|_| anyhow!("Invalid quantity: {}", qty_str))?;
-                components.push(Component {
-                    quantity: qty,
-                    name: cname,
-                });
-            } else {
-                bail!("Invalid indented line: {}", indented);
-            }
-        }
-
-        if let Some((qty, price)) = material {
-            entries.push(Entry::Material {
-                name,
-                quantity: qty,
-                price,
-            });
-        } else {
-            entries.push(Entry::Product { name, components });
-        }
-    }
-
-    Ok(entries)
+/// Includes the ASLR-generated SLR(1) tables.
+pub mod parser_data {
+    include!(concat!(env!("OUT_DIR"), "/parser_data.rs"));
 }
 
-/// Find the position of `x` that immediately follows digits (e.g. `5x` → 1).
-fn find_x_separator(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'x' && i > 0 && bytes[i - 1].is_ascii_digit() {
-            return Some(i);
-        }
+use parser_data::{AmbigID, ParData, ProdID, StateID};
+
+// ─── Driver ──────────────────────────────────────────────────────────────────
+
+/// Stateless driver: performs semantic reductions for every grammar production.
+pub struct PrecifiqueParserDriver<I> {
+    _marker: PhantomData<I>,
+}
+
+impl<I> ParserDriver for PrecifiqueParserDriver<I>
+where
+    I: TryNextWithContext<(), LexerStats, Item = PrecifiqueToken, Error: std::fmt::Display + 'static>,
+{
+    type ParserData = ParData;
+    type Token = PrecifiqueToken;
+    type Parser = Parser<I, Self, ()>;
+    type Context = ();
+
+    fn resolve_ambiguity(
+        &mut self,
+        _parser: &mut Self::Parser,
+        _context: &mut (),
+        _ambig: AmbigID,
+        _token: &PrecifiqueToken,
+    ) -> Result<ParserAction<StateID, ProdID, AmbigID>, ParlexError> {
+        unreachable!("precifique grammar has no shift/reduce ambiguities")
     }
-    None
+
+    fn reduce(
+        &mut self,
+        parser: &mut Self::Parser,
+        _context: &mut (),
+        prod_id: ProdID,
+        _token: &PrecifiqueToken,
+    ) -> Result<(), ParlexError> {
+        match prod_id {
+            ProdID::Start => unreachable!(),
+
+            // ── doc: Document -> EntryList ───────────────────────────────────
+            ProdID::Doc => {
+                let mut list = parser.tokens_pop();
+                list.token_id = TokenID::Document;
+                parser.tokens_push(list);
+            }
+
+            // ── list1: EntryList -> EntryList Entry ──────────────────────────
+            ProdID::List1 => {
+                let entry_tok = parser.tokens_pop();
+                let mut list_tok = parser.tokens_pop();
+                let TokenValue::Entry(e) = entry_tok.value else { unreachable!() };
+                let TokenValue::Entries(ref mut entries) = list_tok.value else { unreachable!() };
+                entries.push(e);
+                parser.tokens_push(list_tok);
+            }
+
+            // ── list2: EntryList -> Entry ────────────────────────────────────
+            ProdID::List2 => {
+                let entry_tok = parser.tokens_pop();
+                let TokenValue::Entry(e) = entry_tok.value else { unreachable!() };
+                parser.tokens_push(PrecifiqueToken {
+                    token_id: TokenID::EntryList,
+                    span: None,
+                    value: TokenValue::Entries(vec![e]),
+                });
+            }
+
+            // ── mat: Entry -> name newline indent qtyat number newline ────────
+            //
+            // Stack top-to-bottom when this fires:
+            //   [top] newline | number | qtyat | indent | newline | name [bottom]
+            ProdID::Mat => {
+                let _nl2 = parser.tokens_pop();   // trailing newline
+                let number = parser.tokens_pop();  // price
+                let qtyat = parser.tokens_pop();   // quantity (@ already stripped)
+                let _indent = parser.tokens_pop();
+                let _nl1 = parser.tokens_pop();    // first newline
+                let name = parser.tokens_pop();
+
+                let TokenValue::Name(n) = name.value else { unreachable!() };
+                let TokenValue::Float(qty) = qtyat.value else { unreachable!() };
+                let TokenValue::Float(price) = number.value else { unreachable!() };
+
+                let entry = ast::Entry::Material { name: n, quantity: qty, price };
+                parser.tokens_push(PrecifiqueToken {
+                    token_id: TokenID::Entry,
+                    span: None,
+                    value: TokenValue::Entry(entry),
+                });
+            }
+
+            // ── prod: Entry -> name newline CompLines ────────────────────────
+            //
+            // Stack top-to-bottom: [top] CompLines | newline | name [bottom]
+            ProdID::Prod => {
+                let comp_lines = parser.tokens_pop();
+                let _nl = parser.tokens_pop();
+                let name = parser.tokens_pop();
+
+                let TokenValue::Name(n) = name.value else { unreachable!() };
+                let TokenValue::Components(components) = comp_lines.value else { unreachable!() };
+
+                let entry = ast::Entry::Product { name: n, components };
+                parser.tokens_push(PrecifiqueToken {
+                    token_id: TokenID::Entry,
+                    span: None,
+                    value: TokenValue::Entry(entry),
+                });
+            }
+
+            // ── cl1: CompLines -> CompLines CompLine ─────────────────────────
+            ProdID::Cl1 => {
+                let comp_tok = parser.tokens_pop();
+                let mut lines_tok = parser.tokens_pop();
+                let TokenValue::Component(c) = comp_tok.value else { unreachable!() };
+                let TokenValue::Components(ref mut cs) = lines_tok.value else { unreachable!() };
+                cs.push(c);
+                parser.tokens_push(lines_tok);
+            }
+
+            // ── cl2: CompLines -> CompLine ───────────────────────────────────
+            ProdID::Cl2 => {
+                let comp_tok = parser.tokens_pop();
+                let TokenValue::Component(c) = comp_tok.value else { unreachable!() };
+                parser.tokens_push(PrecifiqueToken {
+                    token_id: TokenID::CompLines,
+                    span: None,
+                    value: TokenValue::Components(vec![c]),
+                });
+            }
+
+            // ── comp: CompLine -> indent qtytimes name newline ────────────────
+            //
+            // Stack top-to-bottom: [top] newline | name | qtytimes | indent [bottom]
+            ProdID::Comp => {
+                let _nl = parser.tokens_pop();
+                let name = parser.tokens_pop();
+                let qtytimes = parser.tokens_pop();
+                let _indent = parser.tokens_pop();
+
+                let TokenValue::Name(n) = name.value else { unreachable!() };
+                let TokenValue::Float(qty) = qtytimes.value else { unreachable!() };
+
+                let component = ast::Component { quantity: qty, name: n };
+                parser.tokens_push(PrecifiqueToken {
+                    token_id: TokenID::CompLine,
+                    span: None,
+                    value: TokenValue::Component(component),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+// ─── Wrapper ─────────────────────────────────────────────────────────────────
+
+/// Public parser wrapper — drives the full lexer → parser pipeline.
+///
+/// Call `try_next_with_context(&mut ())` once to get the complete
+/// `Document` token (containing all entries), then `None` at EOF.
+pub struct PrecifiqueParser<I>
+where
+    I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
+{
+    parser: Parser<PrecifiqueLexer<I>, PrecifiqueParserDriver<PrecifiqueLexer<I>>, ()>,
+}
+
+impl<I> PrecifiqueParser<I>
+where
+    I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
+{
+    pub fn try_new(input: I) -> Result<Self, ParlexError> {
+        let lexer = PrecifiqueLexer::try_new(input)?;
+        let driver = PrecifiqueParserDriver { _marker: PhantomData };
+        let parser = Parser::new(lexer, driver);
+        Ok(Self { parser })
+    }
+}
+
+impl<I> TryNextWithContext<(), (LexerStats, ParserStats)> for PrecifiqueParser<I>
+where
+    I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
+{
+    type Item = PrecifiqueToken;
+    type Error = ParlexError;
+
+    fn try_next_with_context(
+        &mut self,
+        context: &mut (),
+    ) -> Result<Option<PrecifiqueToken>, ParlexError> {
+        self.parser.try_next_with_context(context)
+    }
+
+    fn stats(&self) -> (LexerStats, ParserStats) {
+        self.parser.stats()
+    }
 }
