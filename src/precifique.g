@@ -3,8 +3,8 @@
 -- The top-level nonterminal is Document.  The parser yields one Document
 -- token (containing all parsed entries) when it sees the End marker at EOF.
 --
--- Terminals (lowercase):   name  newline  indent  qtyat  number  qtytimes
--- Nonterminals (Title):    Document  EntryList  Entry  CompLines  CompLine
+-- Terminals (lowercase):   name  newline  indent  qtyat  number  qtytimes vartax
+-- Nonterminals (Title):    Document  EntryList  Entry  CompLines  CompLine VarTaxLines VarTaxLine
 
 -- Document wraps the complete list of entries.
 doc:   Document  -> EntryList
@@ -25,3 +25,16 @@ cl2: CompLines -> CompLine
 
 -- A single component line: NNNx ComponentName.
 comp: CompLine -> indent qtytimes name newline
+
+-- A variable tax entry: one or more percentages indented lines.
+taxes: Entry -> name newline TaxLines
+
+-- TaxLines accumulates tax lines left-recursively.
+tl1: TaxLines -> TaxLines TaxLine
+tl2: TaxLines -> TaxLine
+
+-- A single variable tax line: NN%
+tax: TaxLine -> indent percent newline
+
+-- A comment
+-- comment: Entry -> semicolon newline

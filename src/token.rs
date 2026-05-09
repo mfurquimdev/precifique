@@ -18,6 +18,10 @@ pub enum TokenValue {
     Component(ast::Component),
     /// A list of components (CompLines non-terminal).
     Components(Vec<ast::Component>),
+    /// A single parsed tax (axLine non-terminal).
+    Tax(ast::Tax),
+    /// A list of taxes (TaxLines non-terminal).
+    Taxs(Vec<ast::Tax>),
     /// A single parsed entry (Entry non-terminal).
     Entry(ast::Entry),
     /// The full list of entries (EntryList / Document non-terminal).

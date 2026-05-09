@@ -42,7 +42,12 @@ pub struct PrecifiqueParserDriver<I> {
 
 impl<I> ParserDriver for PrecifiqueParserDriver<I>
 where
-    I: TryNextWithContext<(), LexerStats, Item = PrecifiqueToken, Error: std::fmt::Display + 'static>,
+    I: TryNextWithContext<
+            (),
+            LexerStats,
+            Item = PrecifiqueToken,
+            Error: std::fmt::Display + 'static,
+        >,
 {
     type ParserData = ParData;
     type Token = PrecifiqueToken;
@@ -80,8 +85,12 @@ where
             ProdID::List1 => {
                 let entry_tok = parser.tokens_pop();
                 let mut list_tok = parser.tokens_pop();
-                let TokenValue::Entry(e) = entry_tok.value else { unreachable!() };
-                let TokenValue::Entries(ref mut entries) = list_tok.value else { unreachable!() };
+                let TokenValue::Entry(e) = entry_tok.value else {
+                    unreachable!()
+                };
+                let TokenValue::Entries(ref mut entries) = list_tok.value else {
+                    unreachable!()
+                };
                 entries.push(e);
                 parser.tokens_push(list_tok);
             }
@@ -89,7 +98,9 @@ where
             // ── list2: EntryList -> Entry ────────────────────────────────────
             ProdID::List2 => {
                 let entry_tok = parser.tokens_pop();
-                let TokenValue::Entry(e) = entry_tok.value else { unreachable!() };
+                let TokenValue::Entry(e) = entry_tok.value else {
+                    unreachable!()
+                };
                 parser.tokens_push(PrecifiqueToken {
                     token_id: TokenID::EntryList,
                     span: None,
@@ -102,18 +113,28 @@ where
             // Stack top-to-bottom when this fires:
             //   [top] newline | number | qtyat | indent | newline | name [bottom]
             ProdID::Mat => {
-                let _nl2 = parser.tokens_pop();   // trailing newline
-                let number = parser.tokens_pop();  // price
-                let qtyat = parser.tokens_pop();   // quantity (@ already stripped)
+                let _nl2 = parser.tokens_pop(); // trailing newline
+                let number = parser.tokens_pop(); // price
+                let qtyat = parser.tokens_pop(); // quantity (@ already stripped)
                 let _indent = parser.tokens_pop();
-                let _nl1 = parser.tokens_pop();    // first newline
+                let _nl1 = parser.tokens_pop(); // first newline
                 let name = parser.tokens_pop();
 
-                let TokenValue::Name(n) = name.value else { unreachable!() };
-                let TokenValue::Float(qty) = qtyat.value else { unreachable!() };
-                let TokenValue::Float(price) = number.value else { unreachable!() };
+                let TokenValue::Name(n) = name.value else {
+                    unreachable!()
+                };
+                let TokenValue::Float(qty) = qtyat.value else {
+                    unreachable!()
+                };
+                let TokenValue::Float(price) = number.value else {
+                    unreachable!()
+                };
 
-                let entry = ast::Entry::Material { name: n, quantity: qty, price };
+                let entry = ast::Entry::Material {
+                    name: n,
+                    quantity: qty,
+                    price,
+                };
                 parser.tokens_push(PrecifiqueToken {
                     token_id: TokenID::Entry,
                     span: None,
@@ -129,10 +150,17 @@ where
                 let _nl = parser.tokens_pop();
                 let name = parser.tokens_pop();
 
-                let TokenValue::Name(n) = name.value else { unreachable!() };
-                let TokenValue::Components(components) = comp_lines.value else { unreachable!() };
+                let TokenValue::Name(n) = name.value else {
+                    unreachable!()
+                };
+                let TokenValue::Components(components) = comp_lines.value else {
+                    unreachable!()
+                };
 
-                let entry = ast::Entry::Product { name: n, components };
+                let entry = ast::Entry::Product {
+                    name: n,
+                    components,
+                };
                 parser.tokens_push(PrecifiqueToken {
                     token_id: TokenID::Entry,
                     span: None,
@@ -144,8 +172,12 @@ where
             ProdID::Cl1 => {
                 let comp_tok = parser.tokens_pop();
                 let mut lines_tok = parser.tokens_pop();
-                let TokenValue::Component(c) = comp_tok.value else { unreachable!() };
-                let TokenValue::Components(ref mut cs) = lines_tok.value else { unreachable!() };
+                let TokenValue::Component(c) = comp_tok.value else {
+                    unreachable!()
+                };
+                let TokenValue::Components(ref mut cs) = lines_tok.value else {
+                    unreachable!()
+                };
                 cs.push(c);
                 parser.tokens_push(lines_tok);
             }
@@ -153,7 +185,9 @@ where
             // ── cl2: CompLines -> CompLine ───────────────────────────────────
             ProdID::Cl2 => {
                 let comp_tok = parser.tokens_pop();
-                let TokenValue::Component(c) = comp_tok.value else { unreachable!() };
+                let TokenValue::Component(c) = comp_tok.value else {
+                    unreachable!()
+                };
                 parser.tokens_push(PrecifiqueToken {
                     token_id: TokenID::CompLines,
                     span: None,
@@ -170,14 +204,47 @@ where
                 let qtytimes = parser.tokens_pop();
                 let _indent = parser.tokens_pop();
 
-                let TokenValue::Name(n) = name.value else { unreachable!() };
-                let TokenValue::Float(qty) = qtytimes.value else { unreachable!() };
+                let TokenValue::Name(n) = name.value else {
+                    unreachable!()
+                };
+                let TokenValue::Float(qty) = qtytimes.value else {
+                    unreachable!()
+                };
 
-                let component = ast::Component { quantity: qty, name: n };
+                let component = ast::Component {
+                    quantity: qty,
+                    name: n,
+                };
                 parser.tokens_push(PrecifiqueToken {
                     token_id: TokenID::CompLine,
                     span: None,
                     value: TokenValue::Component(component),
+                });
+            }
+
+            // ── vartax: Entry -> name newline vartaxqty ───────────────────────
+            //
+            // Stack top-to-bottom: [top] VarTaxLines | newline | name [bottom]
+            ProdID::VarTax => {
+                let var_tax_lines = parser.tokens_pop();
+                let _nl = parser.tokens_pop();
+                let name = parser.tokens_pop();
+
+                let TokenValue::Name(n) = name.value else {
+                    unreachable!()
+                };
+                let TokenValue::VarTaxs(vartaxs) = var_tax_lines.value else {
+                    unreachable!()
+                };
+
+                let entry = ast::Entry::Product {
+                    name: n,
+                    components,
+                };
+                parser.tokens_push(PrecifiqueToken {
+                    token_id: TokenID::Entry,
+                    span: None,
+                    value: TokenValue::Entry(entry),
                 });
             }
         }
@@ -204,7 +271,9 @@ where
 {
     pub fn try_new(input: I) -> Result<Self, ParlexError> {
         let lexer = PrecifiqueLexer::try_new(input)?;
-        let driver = PrecifiqueParserDriver { _marker: PhantomData };
+        let driver = PrecifiqueParserDriver {
+            _marker: PhantomData,
+        };
         let parser = Parser::new(lexer, driver);
         Ok(Self { parser })
     }

@@ -9,6 +9,10 @@ pub enum Entry {
         name: String,
         components: Vec<Component>,
     },
+    Tax {
+        name: String,
+        percent: f64,
+    },
 }
 
 #[derive(Debug, Clone)]

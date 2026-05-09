@@ -9,8 +9,9 @@
 //! ```text
 //!  Initial ──Header──►  AfterHeader ──HeaderNl──► Initial
 //!          ──Indent──►  Indented
-//!                           ├──QtyAt────► Price ──PriceNl──► Initial
-//!                           └──QtyTimes─► CompName ──CompNameNl──► Initial
+//!                           ├──QtyAt────► Price    ──PriceNl─────► Initial
+//!                           ├──QtyTimes─► CompName ──CompNameNl──► Initial
+//!                           └──QtyTax───► Percent  ──TaxNl───────► Initial
 //! ```
 
 use crate::token::{PrecifiqueToken, TokenID, TokenValue};
@@ -106,7 +107,7 @@ where
             Rule::QtyTimes => {
                 // "NNNx " — extract the integer quantity before 'x'.
                 let text = lexer.take_str()?;
-                // Strip trailing 'x' and space: "20x " → "20"
+                // Strip trailing 'x' and space: "20x " -> "20"
                 let qty_str = text.trim_end_matches(|c: char| c == 'x' || c == ' ');
                 let qty: f64 = qty_str
                     .parse()
@@ -117,6 +118,47 @@ where
                     value: TokenValue::Float(qty),
                 });
                 lexer.begin(Mode::CompName);
+            }
+
+            Rule::QtyTax => {
+                // "NN%" — extract the integer quantity before '%'.
+                let text = lexer.take_str()?;
+                // Strip trailing '%': "10%" -> "10"
+                let qty_str = text.trim_end_matches(|c: char| c == '%');
+                let qty: f64 = qty_str
+                    .parse()
+                    .map_err(|e| ParlexError::from_err(e, Some(lexer.span())))?;
+                lexer.yield_token(PrecifiqueToken {
+                    token_id: TokenID::Qtytax,
+                    span: Some(lexer.span()),
+                    value: TokenValue::Float(qty),
+                });
+                lexer.begin(Mode::VarTax);
+            }
+
+            // ── Var Tax mode ───────────────────────────────────────────────────
+            Rule::VarTax => {
+                // The numeric tax, possibly decimal.
+                let text = lexer.take_str()?;
+                let price: f64 = text
+                    .parse()
+                    .map_err(|e| ParlexError::from_err(e, Some(lexer.span())))?;
+                // TODO: It has to be between [0,100] percent
+                lexer.yield_token(PrecifiqueToken {
+                    token_id: TokenID::Number,
+                    span: Some(lexer.span()),
+                    value: TokenValue::Float(price),
+                });
+            }
+
+            Rule::VarTaxNl => {
+                // Newline that closes a variable tax
+                lexer.yield_token(PrecifiqueToken {
+                    token_id: TokenID::Newline,
+                    span: Some(lexer.span()),
+                    value: TokenValue::None,
+                });
+                lexer.begin(Mode::Initial);
             }
 
             // ── Price mode ───────────────────────────────────────────────────
@@ -204,7 +246,9 @@ where
     I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
 {
     pub fn try_new(input: I) -> Result<Self, ParlexError> {
-        let driver = PrecifiqueLexerDriver { _marker: PhantomData };
+        let driver = PrecifiqueLexerDriver {
+            _marker: PhantomData,
+        };
         let lexer = Lexer::try_new(input, driver)?;
         Ok(Self { lexer })
     }

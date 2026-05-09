@@ -11,3 +11,9 @@ Topo de Bolo
     5x Papel Offset 75g
     20x Palito S
     5x Impressão
+
+Taxa de Desperdicio
+    10%
+
+Taxa de Lucro
+    10%

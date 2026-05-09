@@ -12,6 +12,7 @@ impl PrecifiqueEngine {
     pub fn new(entries: Vec<Entry>) -> Self {
         let mut materials = HashMap::new();
         let mut products = HashMap::new();
+        let mut taxes = HashMap::new();
 
         for e in entries {
             match e {
@@ -25,12 +26,16 @@ impl PrecifiqueEngine {
                 Entry::Product { name, components } => {
                     products.insert(name, components);
                 }
+                Entry::Tax { name, percent } => {
+                    taxes.insert(name, percent);
+                }
             }
         }
 
         Self {
             materials,
             products,
+            taxes,
         }
     }
 
