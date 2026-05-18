@@ -6,6 +6,7 @@ use crate::ast::{Component, Entry};
 pub struct PrecifiqueEngine {
     materials: HashMap<String, (f64, f64)>,
     products: HashMap<String, Vec<Component>>,
+    taxes: HashMap<String, f64>,
 }
 
 impl PrecifiqueEngine {
@@ -52,7 +53,18 @@ impl PrecifiqueEngine {
                 total += unit * c.quantity;
             }
 
-            return Ok(total);
+            let mut taxes = 1.0;
+
+            for (tax_name, tax_value) in &self.taxes {
+                println!("{} -> {}", tax_name, tax_value);
+                taxes += tax_value / 100.0;
+            }
+
+            return Ok(total * taxes);
+        }
+
+        if let Some(tax) = self.taxes.get(name) {
+            return Ok(*tax);
         }
 
         Err(anyhow!("Unknown item: {}", name))

@@ -29,8 +29,8 @@ fn main() -> Result<()> {
     let content = fs::read_to_string(&args.file)?;
     let input = IterInput::from(content.into_bytes().into_iter());
 
-    let mut p = parser::PrecifiqueParser::try_new(input)
-        .map_err(|e| anyhow!("lexer init error: {e}"))?;
+    let mut p =
+        parser::PrecifiqueParser::try_new(input).map_err(|e| anyhow!("lexer init error: {e}"))?;
 
     let mut ctx = ();
     let doc = p

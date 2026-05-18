@@ -13,3 +13,7 @@ include_bytes_aligned = "0.2"
 
 [build-dependencies]
 parlex-gen = "0.3"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

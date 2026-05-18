@@ -6,10 +6,12 @@
 --   Indented    -- after consuming a 4-space indent
 --   Price       -- reading the price number after '@'
 --   CompName    -- reading the component name (rest of line) after 'NNNx '
+--   Tax         -- reading the percent number before 'NN%'
 --
 -- Token stream per entry:
 --   Material: Name Newline Indent QtyAt Number Newline
 --   Product:  Name Newline (Indent QtyTimes Name Newline)+
+--   Tax:  Name Newline (Indent QtyPct Newline)+
 
 -- Pattern definitions
 NL  = \r?\n
@@ -39,6 +41,11 @@ QtyAt: <Indented> [0-9]+@
 -- e.g. "5x "  "20x "
 QtyTimes: <Indented> [0-9]+x[ ]
 
+-- Tax pattern: integer quantity immediately followed by '%' and new line
+-- e.g. "5%"  "20%"
+-- QtyPct: <Indented> [0-9]+%
+QtyPct: <Indented> [0-9]+%
+
 -- ── Price mode ───────────────────────────────────────────────────────────────
 -- The numeric price (integer or decimal) after '@'.
 Price: <Price> {{NUM}}
@@ -52,6 +59,10 @@ CompName: <CompName> [^\r\n]+
 
 -- The newline that terminates a component line.
 CompNameNl: <CompName> {{NL}}
+
+-- ── Tax mode ─────────────────────────────────────────────────────────────────
+-- The numeric price (integer or decimal) before '%'.
+-- Tax: <Tax> {{NUM}}
 
 -- ── Catch-all ────────────────────────────────────────────────────────────────
 Error: <*> .

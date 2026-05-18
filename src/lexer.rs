@@ -11,7 +11,7 @@
 //!          ──Indent──►  Indented
 //!                           ├──QtyAt────► Price    ──PriceNl─────► Initial
 //!                           ├──QtyTimes─► CompName ──CompNameNl──► Initial
-//!                           └──QtyTax───► Percent  ──TaxNl───────► Initial
+//!                           └──QtyPct───► Percent  ──TaxNl───────► Initial
 //! ```
 
 use crate::token::{PrecifiqueToken, TokenID, TokenValue};
@@ -120,7 +120,7 @@ where
                 lexer.begin(Mode::CompName);
             }
 
-            Rule::QtyTax => {
+            Rule::QtyPct => {
                 // "NN%" — extract the integer quantity before '%'.
                 let text = lexer.take_str()?;
                 // Strip trailing '%': "10%" -> "10"
@@ -129,36 +129,11 @@ where
                     .parse()
                     .map_err(|e| ParlexError::from_err(e, Some(lexer.span())))?;
                 lexer.yield_token(PrecifiqueToken {
-                    token_id: TokenID::Qtytax,
+                    token_id: TokenID::Qtypct,
                     span: Some(lexer.span()),
                     value: TokenValue::Float(qty),
                 });
-                lexer.begin(Mode::VarTax);
-            }
-
-            // ── Var Tax mode ───────────────────────────────────────────────────
-            Rule::VarTax => {
-                // The numeric tax, possibly decimal.
-                let text = lexer.take_str()?;
-                let price: f64 = text
-                    .parse()
-                    .map_err(|e| ParlexError::from_err(e, Some(lexer.span())))?;
-                // TODO: It has to be between [0,100] percent
-                lexer.yield_token(PrecifiqueToken {
-                    token_id: TokenID::Number,
-                    span: Some(lexer.span()),
-                    value: TokenValue::Float(price),
-                });
-            }
-
-            Rule::VarTaxNl => {
-                // Newline that closes a variable tax
-                lexer.yield_token(PrecifiqueToken {
-                    token_id: TokenID::Newline,
-                    span: Some(lexer.span()),
-                    value: TokenValue::None,
-                });
-                lexer.begin(Mode::Initial);
+                lexer.begin(Mode::AfterHeader);
             }
 
             // ── Price mode ───────────────────────────────────────────────────

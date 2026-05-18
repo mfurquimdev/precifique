@@ -10,6 +10,7 @@
 //! list1: EntryList -> EntryList Entry
 //! list2: EntryList -> Entry
 //! mat:   Entry     -> name newline indent qtyat number newline
+//! tax:   Entry     -> name newline indent qtypct newline
 //! prod:  Entry     -> name newline CompLines
 //! cl1:   CompLines -> CompLines CompLine
 //! cl2:   CompLines -> CompLine
@@ -222,24 +223,28 @@ where
                 });
             }
 
-            // ── vartax: Entry -> name newline vartaxqty ───────────────────────
+            // ── tax: Entry -> name newline taxpct ───────────────────────
             //
-            // Stack top-to-bottom: [top] VarTaxLines | newline | name [bottom]
-            ProdID::VarTax => {
-                let var_tax_lines = parser.tokens_pop();
-                let _nl = parser.tokens_pop();
+            // Stack top-to-bottom when this fires:
+            // [top] newline | qtypct | indent | newline | name [bottom]
+            //
+            ProdID::Tax => {
+                let _nl2 = parser.tokens_pop(); // trailing newline
+                let qtypct = parser.tokens_pop();
+                let _indent = parser.tokens_pop();
+                let _nl1 = parser.tokens_pop(); // first newline
                 let name = parser.tokens_pop();
 
                 let TokenValue::Name(n) = name.value else {
                     unreachable!()
                 };
-                let TokenValue::VarTaxs(vartaxs) = var_tax_lines.value else {
+                let TokenValue::Float(qty) = qtypct.value else {
                     unreachable!()
                 };
 
-                let entry = ast::Entry::Product {
+                let entry = ast::Entry::Tax {
                     name: n,
-                    components,
+                    percent: qty,
                 };
                 parser.tokens_push(PrecifiqueToken {
                     token_id: TokenID::Entry,
