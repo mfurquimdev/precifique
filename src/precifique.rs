@@ -46,21 +46,23 @@ impl PrecifiqueEngine {
         }
 
         if let Some(components) = self.products.get(name) {
-            let mut total = 0.0;
+            let mut sub_total = 0.0;
 
             for c in components {
                 let unit = self.unit_cost(&c.name)?;
-                total += unit * c.quantity;
+                sub_total += unit * c.quantity;
             }
 
-            let mut taxes = 1.0;
+            let mut taxes = 0.0;
 
-            for (tax_name, tax_value) in &self.taxes {
-                println!("{} -> {}", tax_name, tax_value);
+            for (_tax_name, tax_value) in &self.taxes {
                 taxes += tax_value / 100.0;
             }
 
-            return Ok(total * taxes);
+            // let total = sub_total / (1.0 - taxes);
+            let total = sub_total * (1.0 + taxes);
+
+            return Ok(total);
         }
 
         if let Some(tax) = self.taxes.get(name) {
