@@ -1,304 +1,237 @@
-//! Parser for the precifique inventory format.
-//!
-//! This module wires the ASLR-generated SLR(1) tables (`parser_data`) to a
-//! hand-written [`PrecifiqueParserDriver`] that performs semantic reductions.
-//!
-//! Grammar (see `precifique.g`):
-//!
-//! ```text
-//! doc:   Document  -> EntryList
-//! list1: EntryList -> EntryList Entry
-//! list2: EntryList -> Entry
-//! mat:   Entry     -> name newline indent qtyat number newline
-//! tax:   Entry     -> name newline indent qtypct newline
-//! prod:  Entry     -> name newline CompLines
-//! cl1:   CompLines -> CompLines CompLine
-//! cl2:   CompLines -> CompLine
-//! comp:  CompLine  -> indent qtytimes name newline
-//! ```
-//!
-//! The parser yields one `PrecifiqueToken` whose `value` is
-//! `TokenValue::Entries(Vec<Entry>)` when the entire document has been parsed.
+#![allow(clippy::upper_case_acronyms, clippy::result_large_err)]
 
-use crate::ast;
-use crate::lexer::PrecifiqueLexer;
-use crate::token::{PrecifiqueToken, TokenID, TokenValue};
-use parlex::{LexerStats, ParlexError, Parser, ParserAction, ParserDriver, ParserStats};
-use std::marker::PhantomData;
-use try_next::TryNextWithContext;
+use pest::{self, Parser};
 
-/// Includes the ASLR-generated SLR(1) tables.
-pub mod parser_data {
-    include!(concat!(env!("OUT_DIR"), "/parser_data.rs"));
-}
+use crate::ast::{Node, Operator};
 
-use parser_data::{AmbigID, ParData, ProdID, StateID};
+// ANCHOR: parser
+#[derive(pest_derive::Parser)]
+#[grammar = "grammar.pest"]
+struct CalcParser;
+// ANCHOR_END: parser
 
-// ─── Driver ──────────────────────────────────────────────────────────────────
-
-/// Stateless driver: performs semantic reductions for every grammar production.
-pub struct PrecifiqueParserDriver<I> {
-    _marker: PhantomData<I>,
-}
-
-impl<I> ParserDriver for PrecifiqueParserDriver<I>
-where
-    I: TryNextWithContext<
-            (),
-            LexerStats,
-            Item = PrecifiqueToken,
-            Error: std::fmt::Display + 'static,
-        >,
-{
-    type ParserData = ParData;
-    type Token = PrecifiqueToken;
-    type Parser = Parser<I, Self, ()>;
-    type Context = ();
-
-    fn resolve_ambiguity(
-        &mut self,
-        _parser: &mut Self::Parser,
-        _context: &mut (),
-        _ambig: AmbigID,
-        _token: &PrecifiqueToken,
-    ) -> Result<ParserAction<StateID, ProdID, AmbigID>, ParlexError> {
-        unreachable!("precifique grammar has no shift/reduce ambiguities")
+// ANCHOR: parse_source
+pub fn parse(source: &str) -> std::result::Result<Vec<Node>, pest::error::Error<Rule>> {
+    let mut ast = vec![];
+    let pairs = CalcParser::parse(Rule::Program, source)?;
+    for pair in pairs {
+        if let Rule::Expr = pair.as_rule() {
+            ast.push(build_ast_from_expr(pair));
+        }
     }
+    Ok(ast)
+}
+// ANCHOR_END: parse_source
 
-    fn reduce(
-        &mut self,
-        parser: &mut Self::Parser,
-        _context: &mut (),
-        prod_id: ProdID,
-        _token: &PrecifiqueToken,
-    ) -> Result<(), ParlexError> {
-        match prod_id {
-            ProdID::Start => unreachable!(),
-
-            // ── doc: Document -> EntryList ───────────────────────────────────
-            ProdID::Doc => {
-                let mut list = parser.tokens_pop();
-                list.token_id = TokenID::Document;
-                parser.tokens_push(list);
-            }
-
-            // ── list1: EntryList -> EntryList Entry ──────────────────────────
-            ProdID::List1 => {
-                let entry_tok = parser.tokens_pop();
-                let mut list_tok = parser.tokens_pop();
-                let TokenValue::Entry(e) = entry_tok.value else {
-                    unreachable!()
-                };
-                let TokenValue::Entries(ref mut entries) = list_tok.value else {
-                    unreachable!()
-                };
-                entries.push(e);
-                parser.tokens_push(list_tok);
-            }
-
-            // ── list2: EntryList -> Entry ────────────────────────────────────
-            ProdID::List2 => {
-                let entry_tok = parser.tokens_pop();
-                let TokenValue::Entry(e) = entry_tok.value else {
-                    unreachable!()
-                };
-                parser.tokens_push(PrecifiqueToken {
-                    token_id: TokenID::EntryList,
-                    span: None,
-                    value: TokenValue::Entries(vec![e]),
-                });
-            }
-
-            // ── mat: Entry -> name newline indent qtyat number newline ────────
-            //
-            // Stack top-to-bottom when this fires:
-            //   [top] newline | number | qtyat | indent | newline | name [bottom]
-            ProdID::Mat => {
-                let _nl2 = parser.tokens_pop(); // trailing newline
-                let number = parser.tokens_pop(); // price
-                let qtyat = parser.tokens_pop(); // quantity (@ already stripped)
-                let _indent = parser.tokens_pop();
-                let _nl1 = parser.tokens_pop(); // first newline
-                let name = parser.tokens_pop();
-
-                let TokenValue::Name(n) = name.value else {
-                    unreachable!()
-                };
-                let TokenValue::Float(qty) = qtyat.value else {
-                    unreachable!()
-                };
-                let TokenValue::Float(price) = number.value else {
-                    unreachable!()
-                };
-
-                let entry = ast::Entry::Material {
-                    name: n,
-                    quantity: qty,
-                    price,
-                };
-                parser.tokens_push(PrecifiqueToken {
-                    token_id: TokenID::Entry,
-                    span: None,
-                    value: TokenValue::Entry(entry),
-                });
-            }
-
-            // ── prod: Entry -> name newline CompLines ────────────────────────
-            //
-            // Stack top-to-bottom: [top] CompLines | newline | name [bottom]
-            ProdID::Prod => {
-                let comp_lines = parser.tokens_pop();
-                let _nl = parser.tokens_pop();
-                let name = parser.tokens_pop();
-
-                let TokenValue::Name(n) = name.value else {
-                    unreachable!()
-                };
-                let TokenValue::Components(components) = comp_lines.value else {
-                    unreachable!()
-                };
-
-                let entry = ast::Entry::Product {
-                    name: n,
-                    components,
-                };
-                parser.tokens_push(PrecifiqueToken {
-                    token_id: TokenID::Entry,
-                    span: None,
-                    value: TokenValue::Entry(entry),
-                });
-            }
-
-            // ── cl1: CompLines -> CompLines CompLine ─────────────────────────
-            ProdID::Cl1 => {
-                let comp_tok = parser.tokens_pop();
-                let mut lines_tok = parser.tokens_pop();
-                let TokenValue::Component(c) = comp_tok.value else {
-                    unreachable!()
-                };
-                let TokenValue::Components(ref mut cs) = lines_tok.value else {
-                    unreachable!()
-                };
-                cs.push(c);
-                parser.tokens_push(lines_tok);
-            }
-
-            // ── cl2: CompLines -> CompLine ───────────────────────────────────
-            ProdID::Cl2 => {
-                let comp_tok = parser.tokens_pop();
-                let TokenValue::Component(c) = comp_tok.value else {
-                    unreachable!()
-                };
-                parser.tokens_push(PrecifiqueToken {
-                    token_id: TokenID::CompLines,
-                    span: None,
-                    value: TokenValue::Components(vec![c]),
-                });
-            }
-
-            // ── comp: CompLine -> indent qtytimes name newline ────────────────
-            //
-            // Stack top-to-bottom: [top] newline | name | qtytimes | indent [bottom]
-            ProdID::Comp => {
-                let _nl = parser.tokens_pop();
-                let name = parser.tokens_pop();
-                let qtytimes = parser.tokens_pop();
-                let _indent = parser.tokens_pop();
-
-                let TokenValue::Name(n) = name.value else {
-                    unreachable!()
-                };
-                let TokenValue::Float(qty) = qtytimes.value else {
-                    unreachable!()
-                };
-
-                let component = ast::Component {
-                    quantity: qty,
-                    name: n,
-                };
-                parser.tokens_push(PrecifiqueToken {
-                    token_id: TokenID::CompLine,
-                    span: None,
-                    value: TokenValue::Component(component),
-                });
-            }
-
-            // ── tax: Entry -> name newline taxpct ───────────────────────
-            //
-            // Stack top-to-bottom when this fires:
-            // [top] newline | qtypct | indent | newline | name [bottom]
-            //
-            ProdID::Tax => {
-                let _nl2 = parser.tokens_pop(); // trailing newline
-                let qtypct = parser.tokens_pop();
-                let _indent = parser.tokens_pop();
-                let _nl1 = parser.tokens_pop(); // first newline
-                let name = parser.tokens_pop();
-
-                let TokenValue::Name(n) = name.value else {
-                    unreachable!()
-                };
-                let TokenValue::Float(qty) = qtypct.value else {
-                    unreachable!()
-                };
-
-                let entry = ast::Entry::Tax {
-                    name: n,
-                    percent: qty,
-                };
-                parser.tokens_push(PrecifiqueToken {
-                    token_id: TokenID::Entry,
-                    span: None,
-                    value: TokenValue::Entry(entry),
-                });
+fn build_ast_from_expr(pair: pest::iterators::Pair<Rule>) -> Node {
+    match pair.as_rule() {
+        Rule::Expr => build_ast_from_expr(pair.into_inner().next().unwrap()),
+        Rule::UnaryExpr => {
+            let mut pair = pair.into_inner();
+            let op = pair.next().unwrap();
+            let child = pair.next().unwrap();
+            let child = build_ast_from_term(child);
+            parse_unary_expr(op, child)
+        }
+        Rule::BinaryExpr => {
+            let mut pair = pair.into_inner();
+            let lhspair = pair.next().unwrap();
+            // First element can be UnaryExpr or Term (Int/Expr)
+            let mut lhs = match lhspair.as_rule() {
+                Rule::UnaryExpr => {
+                    let mut inner = lhspair.into_inner();
+                    let op = inner.next().unwrap();
+                    let child = inner.next().unwrap();
+                    let child = build_ast_from_term(child);
+                    parse_unary_expr(op, child)
+                }
+                _ => build_ast_from_term(lhspair),
+            };
+            let op = pair.next().unwrap();
+            let rhspair = pair.next().unwrap();
+            let mut rhs = build_ast_from_term(rhspair);
+            let mut retval = parse_binary_expr(op, lhs, rhs);
+            loop {
+                let pair_buf = pair.next();
+                if let Some(op) = pair_buf {
+                    lhs = retval;
+                    rhs = build_ast_from_term(pair.next().unwrap());
+                    retval = parse_binary_expr(op, lhs, rhs);
+                } else {
+                    return retval;
+                }
             }
         }
-        Ok(())
+        Rule::Term => build_ast_from_term(pair),
+        unknown => panic!("Unknown expr: {:?}", unknown),
     }
 }
 
-// ─── Wrapper ─────────────────────────────────────────────────────────────────
+fn build_ast_from_term(pair: pest::iterators::Pair<Rule>) -> Node {
+    assert_eq!(pair.as_rule(), Rule::Term);
 
-/// Public parser wrapper — drives the full lexer → parser pipeline.
-///
-/// Call `try_next_with_context(&mut ())` once to get the complete
-/// `Document` token (containing all entries), then `None` at EOF.
-pub struct PrecifiqueParser<I>
-where
-    I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
-{
-    parser: Parser<PrecifiqueLexer<I>, PrecifiqueParserDriver<PrecifiqueLexer<I>>, ()>,
-}
-
-impl<I> PrecifiqueParser<I>
-where
-    I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
-{
-    pub fn try_new(input: I) -> Result<Self, ParlexError> {
-        let lexer = PrecifiqueLexer::try_new(input)?;
-        let driver = PrecifiqueParserDriver {
-            _marker: PhantomData,
-        };
-        let parser = Parser::new(lexer, driver);
-        Ok(Self { parser })
+    let pair = pair.into_inner().next().unwrap();
+    match pair.as_rule() {
+        Rule::Int => {
+            let int: i32 = pair.as_str().parse().unwrap();
+            Node::Int(int)
+        }
+        Rule::Expr => build_ast_from_expr(pair),
+        unknown => panic!("Unknown term: {:?}", unknown),
     }
 }
 
-impl<I> TryNextWithContext<(), (LexerStats, ParserStats)> for PrecifiqueParser<I>
-where
-    I: TryNextWithContext<(), Item = u8, Error: std::fmt::Display + 'static>,
-{
-    type Item = PrecifiqueToken;
-    type Error = ParlexError;
+fn parse_unary_expr(pair: pest::iterators::Pair<Rule>, child: Node) -> Node {
+    Node::UnaryExpr {
+        op: match pair.as_str() {
+            "+" => Operator::Plus,
+            "-" => Operator::Minus,
+            _ => unreachable!(),
+        },
+        child: Box::new(child),
+    }
+}
 
-    fn try_next_with_context(
-        &mut self,
-        context: &mut (),
-    ) -> Result<Option<PrecifiqueToken>, ParlexError> {
-        self.parser.try_next_with_context(context)
+fn parse_binary_expr(pair: pest::iterators::Pair<Rule>, lhs: Node, rhs: Node) -> Node {
+    Node::BinaryExpr {
+        op: match pair.as_str() {
+            "+" => Operator::Plus,
+            "-" => Operator::Minus,
+            _ => unreachable!(),
+        },
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn basics() {
+        assert!(parse("b").is_err());
+
+        let one = parse("1");
+        assert!(one.is_ok());
+        assert_eq!(one.unwrap()[0], Node::Int(1));
     }
 
-    fn stats(&self) -> (LexerStats, ParserStats) {
-        self.parser.stats()
+    #[test]
+    fn unary_expr() {
+        let plus_one = parse("+1");
+        assert!(plus_one.is_ok());
+        assert_eq!(
+            plus_one.clone().unwrap(),
+            vec![Node::UnaryExpr {
+                op: Operator::Plus,
+                child: Box::new(Node::Int(1))
+            }]
+        );
+        assert_eq!(format!("{}", plus_one.unwrap()[0]), "+1");
+
+        let neg_two = parse("-2");
+        assert!(neg_two.is_ok());
+        assert_eq!(
+            neg_two.clone().unwrap(),
+            vec![Node::UnaryExpr {
+                op: Operator::Minus,
+                child: Box::new(Node::Int(2))
+            }]
+        );
+        assert_eq!(format!("{}", neg_two.unwrap()[0]), "-2");
+    }
+    #[test]
+    fn binary_expr() {
+        let sum = parse("1 + 2");
+        assert!(sum.is_ok());
+        assert_eq!(
+            sum.clone().unwrap(),
+            vec![Node::BinaryExpr {
+                op: Operator::Plus,
+                lhs: Box::new(Node::Int(1)),
+                rhs: Box::new(Node::Int(2))
+            }]
+        );
+        assert_eq!(format!("{}", sum.unwrap()[0]), "1 + 2");
+        let minus = parse("1   -  \t  2");
+        assert!(minus.is_ok());
+        assert_eq!(
+            minus.clone().unwrap(),
+            vec![Node::BinaryExpr {
+                op: Operator::Minus,
+                lhs: Box::new(Node::Int(1)),
+                rhs: Box::new(Node::Int(2))
+            }]
+        );
+        assert_eq!(format!("{}", minus.unwrap()[0]), "1 - 2");
+        // fails as there's no rhs:
+        // let paran_sum = parse("(1 + 2)");
+        // assert!(paran_sum.is_ok());
+    }
+
+    #[test]
+    fn nested_expr() {
+        fn test_expr(expected: &str, src: &str) {
+            assert_eq!(
+                expected,
+                parse(src)
+                    .unwrap()
+                    .iter()
+                    .fold(String::new(), |acc, arg| acc + &format!("{}", &arg))
+            );
+        }
+
+        test_expr("1 + 2 + 3", "(1 + 2) + 3");
+        test_expr("1 + 2 + 3", "1 + (2 + 3)");
+        test_expr("1 + 2 + 3 + 4", "1 + (2 + (3 + 4))");
+        test_expr("1 + 2 + 3 - 4", "(1 + 2) + (3 - 4)");
+    }
+
+    #[test]
+    fn multiple_operators() {
+        assert_eq!(
+            parse("1+2+3").unwrap(),
+            vec![Node::BinaryExpr {
+                op: Operator::Plus,
+                lhs: Box::new(Node::BinaryExpr {
+                    op: Operator::Plus,
+                    lhs: Box::new(Node::Int(1)),
+                    rhs: Box::new(Node::Int(2)),
+                }),
+                rhs: Box::new(Node::Int(3)),
+            }]
+        )
+    }
+
+    #[test]
+    fn negative_first_number() {
+        // Issue #17: First number in expression cannot be negative
+        let result = parse("-1 + 2");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            vec![Node::BinaryExpr {
+                op: Operator::Plus,
+                lhs: Box::new(Node::UnaryExpr {
+                    op: Operator::Minus,
+                    child: Box::new(Node::Int(1))
+                }),
+                rhs: Box::new(Node::Int(2))
+            }]
+        );
+
+        // Also test -2 + 5 = 3
+        let result = parse("-2 + 5");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn whitespace_handling() {
+        // Issue #13: Parser should treat linefeed as whitespace
+        let result = parse("1+2\n");
+        assert!(result.is_ok());
+
+        let result = parse("1 + 2\r\n");
+        assert!(result.is_ok());
     }
 }
